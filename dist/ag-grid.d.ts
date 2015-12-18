@@ -137,24 +137,31 @@ declare module ag.grid {
         name: any;
         allColumns: Column[];
         displayedColumns: Column[];
+        allSubGroups: ColumnGroup[];
+        displayedSubGroups: ColumnGroup[];
         expandable: boolean;
         expanded: boolean;
         actualWidth: number;
         constructor(pinned: any, name: any);
+        update(): void;
         getMinimumWidth(): number;
         addColumn(column: any): void;
+        addSubGroup(group: any): void;
         calculateExpandable(): void;
         calculateActualWidth(): void;
         calculateDisplayedColumns(): void;
+        calculateDisplayedSubGroups(): void;
         addToVisibleColumns(colsToAdd: any): void;
+        updateWidthAfterColumnResize(column: Column): boolean;
     }
 }
 declare module ag.grid {
     class GridOptionsWrapper {
         private gridOptions;
-        private groupHeaders;
+        private columns;
         private headerHeight;
         private rowHeight;
+        private columnDefsDepth;
         private floatingTopRowData;
         private floatingBottomRowData;
         init(gridOptions: GridOptions, eventService: EventService): void;
@@ -214,14 +221,14 @@ declare module ag.grid {
         getIsScrollLag(): () => boolean;
         getSortingOrder(): string[];
         getSlaveGrids(): GridOptions[];
-        getGroupRowRenderer(): Object | Function;
+        getGroupRowRenderer(): Function | Object;
         getRowHeight(): number;
         getOverlayLoadingTemplate(): string;
         getOverlayNoRowsTemplate(): string;
         getHeaderHeight(): number;
         setHeaderHeight(headerHeight: number): void;
+        getColumnDefsDepth(): number;
         isGroupHeaders(): boolean;
-        setGroupHeaders(groupHeaders: boolean): void;
         getFloatingTopRowData(): any[];
         setFloatingTopRowData(rows: any[]): void;
         getFloatingBottomRowData(): any[];
@@ -236,6 +243,10 @@ declare module ag.grid {
         getLocaleTextFunc(): Function;
         globalEventHandler(eventName: string, event?: any): void;
         private getCallbackForEvent(eventName);
+        private getColumnsFromSubHeaders(subHeaders);
+        private getColumnsFromColumnDefs();
+        private updateColumnDefsDepth(colDefs, depth);
+        private calculateColumnDefsDepth();
     }
 }
 declare module ag.grid {
@@ -359,11 +370,13 @@ declare module ag.grid {
         private expressionService;
         private masterSlaveController;
         private allColumns;
+        private allColumnsInGroups;
         private visibleColumns;
         private displayedColumns;
         private pivotColumns;
         private valueColumns;
         private columnGroups;
+        private groupColumn;
         private setupComplete;
         private valueService;
         private pinnedColumnCount;
@@ -407,11 +420,20 @@ declare module ag.grid {
         private updateModel();
         private updateDisplayedColumns();
         sizeColumnsToFit(gridWidth: any): void;
-        private buildGroups();
+        private isGroupVisible(columnGroup);
+        private splitColumnGroupForPinning(columnGroup, pinnedCols, unpinnedCols);
+        private checkForPinningInColumnGroup(columnGroup);
+        private updateVisibleColumnGroupsAndPinning();
         private updateGroups();
+        private needAGroupColumn();
+        private createGroupColumn();
         private updateVisibleColumns();
         private updatePinnedColumns();
         private createColumns(colDefs);
+        private getDepthOfColDefItem(colDef, depth);
+        private addGroupsToPadTargetDepth(group, numParents);
+        private processColDef(colDef, parent, targetDepth);
+        private createColumnsInGroups(colDefs);
         private createPivotColumns();
         private createValueColumns();
         private createDummyColumn(field);
@@ -1175,8 +1197,10 @@ declare module ag.grid {
         private gridOptionsWrapper;
         private columnController;
         private children;
+        private subHeaders;
         private groupWidthStart;
         private childrenWidthStarts;
+        private widthOfSubHeaders;
         private minWidth;
         private parentScope;
         private filterManager;
@@ -1189,7 +1213,8 @@ declare module ag.grid {
         refreshSortIcon(): void;
         onIndividualColumnResized(column: Column): void;
         private setupComponents();
-        private isColumnInOurDisplayedGroup(column);
+        private isColumnInDisplayedSubGroup(column, subGroup);
+        private isColumnInOurDisplayedGroupOrSubGroups(column);
         private setWidthOfGroupHeaderCell();
         private addGroupExpandIcon(eGroupCellLabel);
         onDragStart(): void;
@@ -1695,7 +1720,6 @@ declare module ag.grid {
         columnDefs?: any[];
         datasource?: any;
         pinnedColumnCount?: number;
-        groupHeaders?: boolean;
         headerHeight?: number;
         groupRowInnerRenderer?(params: any): void;
         groupRowRenderer?: Function | Object;
@@ -1813,7 +1837,6 @@ declare module ag.grid {
         getFocusedCell(): any;
         setFocusedCell(rowIndex: any, colIndex: any): void;
         setHeaderHeight(headerHeight: number): void;
-        setGroupHeaders(groupHeaders: boolean): void;
         showToolPanel(show: any): void;
         isToolPanelShowing(): boolean;
         hideColumn(colId: any, hide: any): void;
@@ -2017,7 +2040,6 @@ declare module ag.grid {
         datasource: any;
         pinnedColumnCount: number;
         quickFilterText: string;
-        groupHeaders: boolean;
         headerHeight: number;
         constructor(elementDef: any);
         onInit(): void;

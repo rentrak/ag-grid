@@ -95,7 +95,7 @@ ag-grid-ng2 {
   -moz-box-sizing: border-box;
   box-sizing: border-box;
   text-align: center;
-  height: 50%;
+  height: 25px;
   -o-text-overflow: ellipsis;
   text-overflow: ellipsis;
   overflow: hidden;

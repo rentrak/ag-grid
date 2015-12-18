@@ -541,20 +541,37 @@ var ag;
             function ColumnGroup(pinned, name) {
                 this.allColumns = [];
                 this.displayedColumns = [];
+                this.allSubGroups = [];
+                this.displayedSubGroups = [];
                 this.expandable = false;
                 this.expanded = false;
                 this.pinned = pinned;
                 this.name = name;
             }
+            ColumnGroup.prototype.update = function () {
+                this.calculateExpandable();
+                this.calculateDisplayedColumns();
+                this.calculateDisplayedSubGroups();
+                this.calculateActualWidth();
+                this.displayedSubGroups.forEach(function (columnGroup) {
+                    columnGroup.update();
+                });
+            };
             ColumnGroup.prototype.getMinimumWidth = function () {
                 var result = 0;
                 this.displayedColumns.forEach(function (column) {
                     result += column.getMinimumWidth();
                 });
+                this.displayedSubGroups.forEach(function (columnGroup) {
+                    result += columnGroup.getMinimumWidth();
+                });
                 return result;
             };
             ColumnGroup.prototype.addColumn = function (column) {
                 this.allColumns.push(column);
+            };
+            ColumnGroup.prototype.addSubGroup = function (group) {
+                this.allSubGroups.push(group);
             };
             // need to check that this group has at least one col showing when both expanded and contracted.
             // if not, then we don't allow expanding and contracting on this group
@@ -586,6 +603,10 @@ var ag;
                 var actualWidth = 0;
                 this.displayedColumns.forEach(function (column) {
                     actualWidth += column.actualWidth;
+                });
+                this.displayedSubGroups.forEach(function (columnGroup) {
+                    columnGroup.calculateActualWidth();
+                    actualWidth += columnGroup.actualWidth;
                 });
                 this.actualWidth = actualWidth;
             };
@@ -620,12 +641,42 @@ var ag;
                     }
                 }
             };
+            ColumnGroup.prototype.calculateDisplayedSubGroups = function () {
+                // clear out last time we calculated
+                this.displayedSubGroups = [];
+                // and calculate again
+                for (var i = 0, j = this.allSubGroups.length; i < j; i++) {
+                    var subGroup = this.allSubGroups[i];
+                    subGroup.calculateDisplayedColumns();
+                    subGroup.calculateDisplayedSubGroups();
+                    if (subGroup.displayedColumns.length || subGroup.displayedSubGroups.length) {
+                        this.displayedSubGroups.push(subGroup);
+                    }
+                }
+            };
             // should replace with utils method 'add all'
             ColumnGroup.prototype.addToVisibleColumns = function (colsToAdd) {
-                for (var i = 0; i < this.displayedColumns.length; i++) {
-                    var column = this.displayedColumns[i];
+                for (var i = 0; i < this.displayedSubGroups.length; i++) {
+                    var subGroup = this.displayedSubGroups[i];
+                    subGroup.addToVisibleColumns(colsToAdd);
+                }
+                for (var j = 0; j < this.displayedColumns.length; j++) {
+                    var column = this.displayedColumns[j];
                     colsToAdd.push(column);
                 }
+            };
+            ColumnGroup.prototype.updateWidthAfterColumnResize = function (column) {
+                var recalculated = false;
+                var subGroupRecalculated = false;
+                this.displayedSubGroups.forEach(function (columnGroup) {
+                    var recalc = columnGroup.updateWidthAfterColumnResize(column);
+                    subGroupRecalculated = subGroupRecalculated || recalc;
+                });
+                if (subGroupRecalculated || this.displayedColumns.indexOf(column) >= 0) {
+                    this.calculateActualWidth();
+                    recalculated = true;
+                }
+                return recalculated;
             };
             return ColumnGroup;
         })();
@@ -648,10 +699,11 @@ var ag;
             GridOptionsWrapper.prototype.init = function (gridOptions, eventService) {
                 this.gridOptions = gridOptions;
                 this.headerHeight = gridOptions.headerHeight;
-                this.groupHeaders = gridOptions.groupHeaders;
                 this.rowHeight = gridOptions.rowHeight;
                 this.floatingTopRowData = gridOptions.floatingTopRowData;
                 this.floatingBottomRowData = gridOptions.floatingBottomRowData;
+                this.columns = this.getColumnsFromColumnDefs();
+                this.columnDefsDepth = this.calculateColumnDefsDepth();
                 eventService.addGlobalListener(this.globalEventHandler.bind(this));
                 // set defaults
                 if (!this.rowHeight) {
@@ -726,8 +778,8 @@ var ag;
                 }
                 else {
                     // otherwise return 25 if no grouping, 50 if grouping
-                    if (this.groupHeaders) {
-                        return 50;
+                    if (this.isGroupHeaders()) {
+                        return 25 * this.columnDefsDepth;
                     }
                     else {
                         return 25;
@@ -735,8 +787,8 @@ var ag;
                 }
             };
             GridOptionsWrapper.prototype.setHeaderHeight = function (headerHeight) { this.headerHeight = headerHeight; };
-            GridOptionsWrapper.prototype.isGroupHeaders = function () { return isTrue(this.groupHeaders); };
-            GridOptionsWrapper.prototype.setGroupHeaders = function (groupHeaders) { this.groupHeaders = groupHeaders; };
+            GridOptionsWrapper.prototype.getColumnDefsDepth = function () { return this.columnDefsDepth; };
+            GridOptionsWrapper.prototype.isGroupHeaders = function () { return this.columnDefsDepth > 1; };
             GridOptionsWrapper.prototype.getFloatingTopRowData = function () { return this.floatingTopRowData; };
             GridOptionsWrapper.prototype.setFloatingTopRowData = function (rows) { this.floatingTopRowData = rows; };
             GridOptionsWrapper.prototype.getFloatingBottomRowData = function () { return this.floatingBottomRowData; };
@@ -833,6 +885,50 @@ var ag;
                 else {
                     return 'on' + eventName[0].toUpperCase() + eventName.substr(1);
                 }
+            };
+            GridOptionsWrapper.prototype.getColumnsFromSubHeaders = function (subHeaders) {
+                var columns = [];
+                for (var i = 0; i < subHeaders.length; i++) {
+                    var colDef = subHeaders[i];
+                    if (colDef.subHeaders) {
+                        var columnsFromSubHeaders = this.getColumnsFromSubHeaders(colDef.subHeaders);
+                        columnsFromSubHeaders.forEach(function (column) {
+                            columns.push(column);
+                        });
+                    }
+                    else {
+                        columns.push(colDef);
+                    }
+                }
+                return columns;
+            };
+            GridOptionsWrapper.prototype.getColumnsFromColumnDefs = function () {
+                var columns = [];
+                if (this.gridOptions.columnDefs) {
+                    columns = this.getColumnsFromSubHeaders(this.gridOptions.columnDefs);
+                }
+                return columns;
+            };
+            GridOptionsWrapper.prototype.updateColumnDefsDepth = function (colDefs, depth) {
+                var maxDepth = depth;
+                var itemDepth = 0;
+                for (var i = 0; i < colDefs.length; i++) {
+                    var colDef = colDefs[i];
+                    if (colDef.subHeaders) {
+                        itemDepth = this.updateColumnDefsDepth(colDef.subHeaders, depth + 1);
+                        if (itemDepth > maxDepth) {
+                            maxDepth = itemDepth;
+                        }
+                    }
+                }
+                return maxDepth;
+            };
+            GridOptionsWrapper.prototype.calculateColumnDefsDepth = function () {
+                var depth = 0;
+                if (this.gridOptions.columnDefs) {
+                    depth = this.updateColumnDefsDepth(this.gridOptions.columnDefs, 1);
+                }
+                return depth;
             };
             return GridOptionsWrapper;
         })();
@@ -1277,9 +1373,7 @@ var ag;
             ColumnController.prototype.updateGroupWidthsAfterColumnResize = function (column) {
                 if (this.columnGroups) {
                     this.columnGroups.forEach(function (columnGroup) {
-                        if (columnGroup.displayedColumns.indexOf(column) >= 0) {
-                            columnGroup.calculateActualWidth();
-                        }
+                        columnGroup.updateWidthAfterColumnResize(column);
                     });
                 }
             };
@@ -1502,6 +1596,7 @@ var ag;
             ColumnController.prototype.onColumnsChanged = function () {
                 var columnDefs = this.gridOptionsWrapper.getColumnDefs();
                 this.checkForDeprecatedItems(columnDefs);
+                this.createColumnsInGroups(columnDefs);
                 this.createColumns(columnDefs);
                 this.createPivotColumns();
                 this.createValueColumns();
@@ -1558,7 +1653,7 @@ var ag;
             ColumnController.prototype.updateModel = function () {
                 this.updateVisibleColumns();
                 this.updatePinnedColumns();
-                this.buildGroups();
+                this.updateVisibleColumnGroupsAndPinning();
                 this.updateGroups();
                 this.updateDisplayedColumns();
             };
@@ -1652,38 +1747,134 @@ var ag;
                     return result;
                 }
             };
-            ColumnController.prototype.buildGroups = function () {
+            ColumnController.prototype.isGroupVisible = function (columnGroup) {
+                for (var i = 0; i < columnGroup.allColumns.length; i++) {
+                    var column = columnGroup.allColumns[i];
+                    if (this.visibleColumns.indexOf(column) > -1) {
+                        return true;
+                    }
+                }
+                for (var j = 0; j < columnGroup.allSubGroups.length; j++) {
+                    var subGroup = columnGroup.allSubGroups[j];
+                    if (this.isGroupVisible(subGroup)) {
+                        return true;
+                    }
+                }
+                return false;
+            };
+            ColumnController.prototype.splitColumnGroupForPinning = function (columnGroup, pinnedCols, unpinnedCols) {
+                var pinnedGroup = new grid.ColumnGroup(true, columnGroup.name);
+                pinnedCols.forEach(function (col) {
+                    pinnedGroup.addColumn(col);
+                });
+                var unpinnedGroup = new grid.ColumnGroup(false, columnGroup.name);
+                unpinnedCols.forEach(function (col) {
+                    unpinnedGroup.addColumn(col);
+                });
+                return [pinnedGroup, unpinnedGroup];
+            };
+            ColumnController.prototype.checkForPinningInColumnGroup = function (columnGroup) {
+                var _this = this;
+                var resultGroups = [];
+                if (!this.isGroupVisible(columnGroup)) {
+                    return resultGroups;
+                }
+                var pinnedGroupCols = columnGroup.allColumns.filter(function (col) {
+                    return col.pinned;
+                });
+                var unpinnedGroupCols = columnGroup.allColumns.filter(function (col) {
+                    return !col.pinned;
+                });
+                if (pinnedGroupCols.length && unpinnedGroupCols.length) {
+                    // some of the columns in this group are pinned and some are not, so this group needs to split into
+                    // two groups where one is pinned and one is not
+                    resultGroups = this.splitColumnGroupForPinning(columnGroup, pinnedGroupCols, unpinnedGroupCols);
+                }
+                else if (pinnedGroupCols.length) {
+                    // this group has only pinned columns, so this group just needs to be pinned
+                    var pinnedGroup = new grid.ColumnGroup(true, columnGroup.name);
+                    pinnedGroupCols.forEach(function (col) {
+                        pinnedGroup.addColumn(col);
+                    });
+                    resultGroups = [pinnedGroup];
+                }
+                else if (unpinnedGroupCols.length) {
+                    // this group has only unpinned columns, so do nothing
+                    resultGroups = [columnGroup];
+                }
+                else {
+                    // this group has no columns... so check within sub-groups
+                    var pinnedSubGroups = [];
+                    var unpinnedSubGroups = [];
+                    columnGroup.allSubGroups.forEach(function (subGroup) {
+                        var subGroupsAfterSplit = _this.checkForPinningInColumnGroup(subGroup);
+                        if (subGroupsAfterSplit.length === 2) {
+                            pinnedSubGroups.push(subGroupsAfterSplit[0]);
+                            unpinnedSubGroups.push(subGroupsAfterSplit[1]);
+                        }
+                        else if (subGroupsAfterSplit.length === 1) {
+                            if (subGroupsAfterSplit[0].pinned) {
+                                pinnedSubGroups.push(subGroupsAfterSplit[0]);
+                            }
+                            else {
+                                unpinnedSubGroups.push(subGroupsAfterSplit[0]);
+                            }
+                        }
+                    });
+                    if (pinnedSubGroups.length && unpinnedSubGroups.length) {
+                        // some of the sub-groups in this group are pinned and some are not,
+                        // so this group needs to split into two groups where one is pinned and one is not
+                        var pinnedGroup = new grid.ColumnGroup(true, columnGroup.name);
+                        pinnedSubGroups.forEach(function (subGroup) {
+                            pinnedGroup.addSubGroup(subGroup);
+                        });
+                        var unpinnedGroup = new grid.ColumnGroup(false, columnGroup.name);
+                        unpinnedSubGroups.forEach(function (subGroup) {
+                            unpinnedGroup.addSubGroup(subGroup);
+                        });
+                        resultGroups = [pinnedGroup, unpinnedGroup];
+                    }
+                    else if (pinnedSubGroups.length) {
+                        // this group has only pinned sub-groups, so this group just needs to be pinned
+                        var pinnedGroup = new grid.ColumnGroup(true, columnGroup.name);
+                        pinnedSubGroups.forEach(function (subGroup) {
+                            pinnedGroup.addSubGroup(subGroup);
+                        });
+                        resultGroups = [pinnedGroup];
+                    }
+                    else if (unpinnedSubGroups.length) {
+                        // this group has only unpinned sub-groups, so do nothing
+                        resultGroups = [columnGroup];
+                    }
+                }
+                return resultGroups;
+            };
+            ColumnController.prototype.updateVisibleColumnGroupsAndPinning = function () {
+                var _this = this;
                 // if not grouping by headers, do nothing
                 if (!this.gridOptionsWrapper.isGroupHeaders()) {
                     this.columnGroups = null;
                     return;
                 }
-                // split the columns into groups
-                var currentGroup = null;
                 this.columnGroups = [];
-                var that = this;
-                var lastColWasPinned = true;
-                this.visibleColumns.forEach(function (column) {
-                    // do we need a new group, because we move from pinned to non-pinned columns?
-                    var endOfPinnedHeader = lastColWasPinned && !column.pinned;
-                    if (!column.pinned) {
-                        lastColWasPinned = false;
-                    }
-                    // do we need a new group, because the group names doesn't match from previous col?
-                    var groupKeyMismatch = currentGroup && column.colDef.headerGroup !== currentGroup.name;
-                    // we don't group columns where no group is specified
-                    var colNotInGroup = currentGroup && !currentGroup.name;
-                    // do we need a new group, because we are just starting
-                    var processingFirstCol = currentGroup === null;
-                    var newGroupNeeded = processingFirstCol || endOfPinnedHeader || groupKeyMismatch || colNotInGroup;
-                    // create new group, if it's needed
-                    if (newGroupNeeded) {
-                        var pinned = column.pinned;
-                        currentGroup = new grid.ColumnGroup(pinned, column.colDef.headerGroup);
-                        that.columnGroups.push(currentGroup);
-                    }
-                    currentGroup.addColumn(column);
-                });
+                if (this.needAGroupColumn()) {
+                    var groupColumn = this.createGroupColumn();
+                    groupColumn.pinned = this.pinnedColumnCount > 0;
+                    var group = new grid.ColumnGroup(groupColumn.pinned, undefined);
+                    group.addColumn(groupColumn);
+                    // the depth of the group column should match the max-depth of the headers
+                    // first, need to subtract 2 for the header itself and the group it was just added to
+                    var targetDepth = this.gridOptionsWrapper.getColumnDefsDepth() - 2;
+                    var topLevelGroup = this.addGroupsToPadTargetDepth(group, targetDepth);
+                    this.columnGroups.push(topLevelGroup);
+                }
+                for (var i = 0; i < this.allColumnsInGroups.length; i++) {
+                    var columnGroup = this.allColumnsInGroups[i];
+                    var columnGroupsAfterPinningCheck = this.checkForPinningInColumnGroup(columnGroup);
+                    columnGroupsAfterPinningCheck.forEach(function (newColumnGroup) {
+                        _this.columnGroups.push(newColumnGroup);
+                    });
+                }
             };
             ColumnController.prototype.updateGroups = function () {
                 // if not grouping by headers, do nothing
@@ -1692,20 +1883,19 @@ var ag;
                 }
                 for (var i = 0; i < this.columnGroups.length; i++) {
                     var group = this.columnGroups[i];
-                    group.calculateExpandable();
-                    group.calculateDisplayedColumns();
-                    group.calculateActualWidth();
+                    group.update();
                 }
             };
-            ColumnController.prototype.updateVisibleColumns = function () {
-                this.visibleColumns = [];
+            ColumnController.prototype.needAGroupColumn = function () {
                 // see if we need to insert the default grouping column
-                var needAGroupColumn = this.pivotColumns.length > 0
+                return this.pivotColumns.length > 0
                     && !this.gridOptionsWrapper.isGroupSuppressAutoColumn()
                     && !this.gridOptionsWrapper.isGroupUseEntireRow()
                     && !this.gridOptionsWrapper.isGroupSuppressRow();
+            };
+            ColumnController.prototype.createGroupColumn = function () {
                 var localeTextFunc = this.gridOptionsWrapper.getLocaleTextFunc();
-                if (needAGroupColumn) {
+                if (!this.groupColumn) {
                     // if one provided by user, use it, otherwise create one
                     var groupColDef = this.gridOptionsWrapper.getGroupColumnDef();
                     if (!groupColDef) {
@@ -1718,7 +1908,15 @@ var ag;
                     }
                     // no group column provided, need to create one here
                     var groupColumnWidth = this.calculateColInitialWidth(groupColDef);
-                    var groupColumn = new grid.Column(groupColDef, groupColumnWidth);
+                    this.groupColumn = new grid.Column(groupColDef, groupColumnWidth);
+                }
+                return this.groupColumn;
+            };
+            ColumnController.prototype.updateVisibleColumns = function () {
+                this.visibleColumns = [];
+                if (this.needAGroupColumn()) {
+                    this.groupColumn = null;
+                    var groupColumn = this.createGroupColumn();
                     this.visibleColumns.push(groupColumn);
                 }
                 for (var i = 0; i < this.allColumns.length; i++) {
@@ -1738,6 +1936,10 @@ var ag;
                 }
             };
             ColumnController.prototype.createColumns = function (colDefs) {
+                // skip if grouping by header, allColumns is updated in createColumnsInGroups
+                if (this.gridOptionsWrapper.isGroupHeaders()) {
+                    return;
+                }
                 this.allColumns = [];
                 if (colDefs) {
                     for (var i = 0; i < colDefs.length; i++) {
@@ -1745,6 +1947,100 @@ var ag;
                         var width = this.calculateColInitialWidth(colDef);
                         var column = new grid.Column(colDef, width);
                         this.allColumns.push(column);
+                    }
+                }
+            };
+            ColumnController.prototype.getDepthOfColDefItem = function (colDef, depth) {
+                var _this = this;
+                var maxDepth = depth;
+                if (colDef.subHeaders) {
+                    colDef.subHeaders.forEach(function (subHeaderColDef) {
+                        var subHeaderDepth = _this.getDepthOfColDefItem(subHeaderColDef, depth + 1);
+                        if (subHeaderDepth > maxDepth) {
+                            maxDepth = subHeaderDepth;
+                        }
+                    });
+                }
+                return maxDepth;
+            };
+            ColumnController.prototype.addGroupsToPadTargetDepth = function (group, numParents) {
+                var topLevelGroup = null;
+                var parent = null;
+                if (numParents > 0) {
+                    parent = new grid.ColumnGroup(group.pinned, undefined);
+                    parent.addSubGroup(group);
+                    topLevelGroup = this.addGroupsToPadTargetDepth(parent, numParents - 1);
+                }
+                return topLevelGroup || parent || group;
+            };
+            ColumnController.prototype.processColDef = function (colDef, parent, targetDepth) {
+                var _this = this;
+                var topLevelGroup = null;
+                var depthOfColDef = this.getDepthOfColDefItem(colDef, 1);
+                if (colDef.subHeaders) {
+                    // this item is a header group
+                    // by default targetDepth for children will just be targetDepth - 1
+                    // since the children are one level closer to the bottom of the tree
+                    var childrenTargetDepth = targetDepth - 1;
+                    var group = new grid.ColumnGroup(!!colDef.pinned, colDef.headerName);
+                    if (depthOfColDef < targetDepth) {
+                        var numPaddingGroups = targetDepth - depthOfColDef;
+                        // create groups above this item so that this item's depth matches the target depth
+                        topLevelGroup = this.addGroupsToPadTargetDepth(group, numPaddingGroups);
+                        // if padding was just added above this item, need to adjust targetDepth for children
+                        childrenTargetDepth = childrenTargetDepth - numPaddingGroups;
+                    }
+                    else {
+                        topLevelGroup = group;
+                    }
+                    colDef.subHeaders.forEach(function (subHeaderColDef) {
+                        _this.processColDef(subHeaderColDef, group, childrenTargetDepth);
+                    });
+                    if (parent) {
+                        parent.addSubGroup(topLevelGroup);
+                    }
+                }
+                else {
+                    // this item is a column
+                    var width = this.calculateColInitialWidth(colDef);
+                    var column = new grid.Column(colDef, width);
+                    if (depthOfColDef < targetDepth) {
+                        var group = new grid.ColumnGroup(!!colDef.pinned, undefined);
+                        group.addColumn(column);
+                        // create groups above this item so that this item's depth matches the target depth
+                        // note: we pass targetDepth - depthOfColDef - 1 since here we're putting the column
+                        // into a group before we use this helper (which expects to get a group not a column)
+                        topLevelGroup = this.addGroupsToPadTargetDepth(group, targetDepth - depthOfColDef - 1);
+                    }
+                    if (parent) {
+                        if (topLevelGroup) {
+                            parent.addSubGroup(topLevelGroup);
+                        }
+                        else {
+                            parent.addColumn(column);
+                        }
+                    }
+                    this.allColumns.push(column);
+                }
+                return topLevelGroup;
+            };
+            ColumnController.prototype.createColumnsInGroups = function (colDefs) {
+                if (!this.gridOptionsWrapper.isGroupHeaders()) {
+                    return;
+                }
+                this.allColumnsInGroups = [];
+                this.allColumns = [];
+                if (colDefs) {
+                    var maxColDefDepth = this.gridOptionsWrapper.getColumnDefsDepth();
+                    for (var i = 0; i < colDefs.length; i++) {
+                        var colDef = colDefs[i];
+                        // process column definitions, passing the maximum depth as a target
+                        // if a node is at the top level of the column definitions but does not match
+                        // the maximum depth we want to put empty groups above it to balance the tree
+                        var group = this.processColDef(colDef, null, maxColDefDepth);
+                        if (group) {
+                            this.allColumnsInGroups.push(group);
+                        }
                     }
                 }
             };
@@ -3574,8 +3870,7 @@ var ag;
 var __extends = (this && this.__extends) || function (d, b) {
     for (var p in b) if (b.hasOwnProperty(p)) d[p] = b[p];
     function __() { this.constructor = d; }
-    __.prototype = b.prototype;
-    d.prototype = new __();
+    d.prototype = b === null ? Object.create(b) : (__.prototype = b.prototype, new __());
 };
 var ag;
 (function (ag) {
@@ -6362,6 +6657,7 @@ var ag;
             function RenderedHeaderGroupCell(columnGroup, gridOptionsWrapper, columnController, eRoot, angularGrid, parentScope, filterManager, $compile) {
                 _super.call(this, eRoot);
                 this.children = [];
+                this.subHeaders = [];
                 this.columnController = columnController;
                 this.columnGroup = columnGroup;
                 this.gridOptionsWrapper = gridOptionsWrapper;
@@ -6378,9 +6674,15 @@ var ag;
                 this.children.forEach(function (childElement) {
                     childElement.destroy();
                 });
+                this.subHeaders.forEach(function (childElement) {
+                    childElement.destroy();
+                });
             };
             RenderedHeaderGroupCell.prototype.refreshFilterIcon = function () {
                 this.children.forEach(function (childElement) {
+                    childElement.refreshFilterIcon();
+                });
+                this.subHeaders.forEach(function (childElement) {
                     childElement.refreshFilterIcon();
                 });
             };
@@ -6390,10 +6692,13 @@ var ag;
                 });
             };
             RenderedHeaderGroupCell.prototype.onIndividualColumnResized = function (column) {
-                if (!this.isColumnInOurDisplayedGroup(column)) {
+                if (!this.isColumnInOurDisplayedGroupOrSubGroups(column)) {
                     return;
                 }
                 this.children.forEach(function (childElement) {
+                    childElement.onIndividualColumnResized(column);
+                });
+                this.subHeaders.forEach(function (childElement) {
                     childElement.onIndividualColumnResized(column);
                 });
                 this.setWidthOfGroupHeaderCell();
@@ -6434,6 +6739,11 @@ var ag;
                     }
                 }
                 this.eHeaderGroup.appendChild(this.eHeaderGroupCell);
+                this.columnGroup.displayedSubGroups.forEach(function (columnGroup) {
+                    var renderedHeaderGroupCell = new RenderedHeaderGroupCell(columnGroup, _this.gridOptionsWrapper, _this.columnController, _this.getERoot(), _this.angularGrid, _this.parentScope, _this.filterManager, _this.$compile);
+                    _this.subHeaders.push(renderedHeaderGroupCell);
+                    _this.eHeaderGroup.appendChild(renderedHeaderGroupCell.getGui());
+                });
                 this.columnGroup.displayedColumns.forEach(function (column) {
                     var renderedHeaderCell = new grid.RenderedHeaderCell(column, _this, _this.gridOptionsWrapper, _this.parentScope, _this.filterManager, _this.columnController, _this.$compile, _this.angularGrid, _this.getERoot());
                     _this.children.push(renderedHeaderCell);
@@ -6441,8 +6751,16 @@ var ag;
                 });
                 this.setWidthOfGroupHeaderCell();
             };
-            RenderedHeaderGroupCell.prototype.isColumnInOurDisplayedGroup = function (column) {
-                return this.columnGroup.displayedColumns.indexOf(column) >= 0;
+            RenderedHeaderGroupCell.prototype.isColumnInDisplayedSubGroup = function (column, subGroup) {
+                for (var i = 0; i < subGroup.displayedSubGroups.length; i++) {
+                    if (this.isColumnInDisplayedSubGroup(column, subGroup.displayedSubGroups[i])) {
+                        return true;
+                    }
+                }
+                return subGroup.displayedColumns.indexOf(column) >= 0;
+            };
+            RenderedHeaderGroupCell.prototype.isColumnInOurDisplayedGroupOrSubGroups = function (column) {
+                return this.isColumnInDisplayedSubGroup(column, this.columnGroup);
             };
             RenderedHeaderGroupCell.prototype.setWidthOfGroupHeaderCell = function () {
                 this.eHeaderGroupCell.style.width = _.formatWidth(this.columnGroup.actualWidth);
@@ -6470,7 +6788,16 @@ var ag;
                 this.columnGroup.displayedColumns.forEach(function (column) {
                     _this.childrenWidthStarts.push(column.actualWidth);
                 });
+                this.widthOfSubHeaders = 0;
+                this.columnGroup.displayedSubGroups.forEach(function (columnGroup) {
+                    _this.widthOfSubHeaders += columnGroup.actualWidth;
+                });
                 this.minWidth = this.columnGroup.getMinimumWidth();
+                // propagate to last sub-header to eventually result in column resize
+                var lastSubHeader = this.subHeaders[this.subHeaders.length - 1];
+                if (lastSubHeader) {
+                    lastSubHeader.onDragStart();
+                }
             };
             RenderedHeaderGroupCell.prototype.onDragging = function (dragChange, finished) {
                 var _this = this;
@@ -6486,7 +6813,7 @@ var ag;
                 var changeRatio = newWidth / this.groupWidthStart;
                 // keep track of pixels used, and last column gets the remaining,
                 // to cater for rounding errors, and min width adjustments
-                var pixelsToDistribute = newWidth;
+                var pixelsToDistribute = newWidth - this.widthOfSubHeaders;
                 var displayedColumns = this.columnGroup.displayedColumns;
                 displayedColumns.forEach(function (column, index) {
                     var notLastCol = index !== (displayedColumns.length - 1);
@@ -6506,6 +6833,11 @@ var ag;
                     }
                     _this.columnController.setColumnWidth(column, newChildSize, finished);
                 });
+                // propagate to last sub-header to eventually result in column resize
+                var lastSubHeader = this.subHeaders[this.subHeaders.length - 1];
+                if (lastSubHeader) {
+                    lastSubHeader.onDragging(dragChange, false);
+                }
             };
             return RenderedHeaderGroupCell;
         })(grid.RenderedHeaderElement);
@@ -9455,12 +9787,6 @@ var ag;
                 this.gridOptionsWrapper.setHeaderHeight(headerHeight);
                 this.gridPanel.onBodyHeightChange();
             };
-            GridApi.prototype.setGroupHeaders = function (groupHeaders) {
-                this.gridOptionsWrapper.setGroupHeaders(groupHeaders);
-                this.columnController.onColumnsChanged();
-                // if using the default height, then this is impacted by the header count
-                this.gridPanel.onBodyHeightChange();
-            };
             GridApi.prototype.showToolPanel = function (show) {
                 this.grid.showToolPanel(show);
             };
@@ -10245,9 +10571,6 @@ var ag;
                 if (changes.pinnedColumnCount) {
                     component.columnApi.setPinnedColumnCount(component.pinnedColumnCount);
                 }
-                if (changes.groupHeaders) {
-                    component.api.setGroupHeaders(component.groupHeaders);
-                }
                 if (changes.headerHeight) {
                     component.api.setHeaderHeight(component.headerHeight);
                 }
@@ -10308,7 +10631,7 @@ var ag;
                 'singleClickEdit', 'suppressLoadingOverlay', 'suppressNoRowsOverlay'
             ];
             ComponentUtil.WITH_IMPACT_NUMBER_PROPERTIES = ['pinnedColumnCount', 'headerHeight'];
-            ComponentUtil.WITH_IMPACT_BOOLEAN_PROPERTIES = ['groupHeaders', 'showToolPanel'];
+            ComponentUtil.WITH_IMPACT_BOOLEAN_PROPERTIES = ['showToolPanel'];
             ComponentUtil.WITH_IMPACT_OTHER_PROPERTIES = [
                 'rowData', 'floatingTopRowData', 'floatingBottomRowData', 'groupKeys',
                 'groupAggFields', 'columnDefs', 'datasource', 'quickFilterText'];
