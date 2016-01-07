@@ -2042,9 +2042,9 @@ declare module ag.grid {
         quickFilterText: string;
         headerHeight: number;
         constructor(elementDef: any);
-        onInit(): void;
-        onChanges(changes: any): void;
-        onDestroy(): void;
+        ngOnInit(): void;
+        ngOnChanges(changes: any): void;
+        ngOnDestroy(): void;
         private globalEventListener(eventType, event);
     }
     function initialiseAgGridWithAngular2(ng: any): void;
