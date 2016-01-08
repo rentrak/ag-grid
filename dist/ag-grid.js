@@ -1653,6 +1653,7 @@ var ag;
             ColumnController.prototype.updateModel = function () {
                 this.updateVisibleColumns();
                 this.updatePinnedColumns();
+                this.updateVisibleColumnsInGroups();
                 this.updateVisibleColumnGroupsAndPinning();
                 this.updateGroups();
                 this.updateDisplayedColumns();
@@ -1849,6 +1850,34 @@ var ag;
                 }
                 return resultGroups;
             };
+            ColumnController.prototype.copyGroupWithOnlyVisibleColumns = function (columnGroup) {
+                var _this = this;
+                var newGroup = new grid.ColumnGroup(columnGroup.pinned, columnGroup.name);
+                columnGroup.allColumns.forEach(function (column) {
+                    if (column.visible) {
+                        newGroup.allColumns.push(column);
+                    }
+                });
+                columnGroup.allSubGroups.forEach(function (subGroup) {
+                    newGroup.allSubGroups.push(_this.copyGroupWithOnlyVisibleColumns(subGroup));
+                });
+                return newGroup;
+            };
+            ColumnController.prototype.updateVisibleColumnsInGroups = function () {
+                var _this = this;
+                // if not grouping by headers, do nothing
+                if (!this.gridOptionsWrapper.isGroupHeaders()) {
+                    return;
+                }
+                this.visibleColumnsInGroups = [];
+                this.allColumnsInGroups.forEach(function (columnGroup) {
+                    if (_this.isGroupVisible(columnGroup)) {
+                        var newGroup = _this.copyGroupWithOnlyVisibleColumns(columnGroup);
+                        newGroup.update();
+                        _this.visibleColumnsInGroups.push(newGroup);
+                    }
+                });
+            };
             ColumnController.prototype.updateVisibleColumnGroupsAndPinning = function () {
                 var _this = this;
                 // if not grouping by headers, do nothing
@@ -1868,8 +1897,8 @@ var ag;
                     var topLevelGroup = this.addGroupsToPadTargetDepth(group, targetDepth);
                     this.columnGroups.push(topLevelGroup);
                 }
-                for (var i = 0; i < this.allColumnsInGroups.length; i++) {
-                    var columnGroup = this.allColumnsInGroups[i];
+                for (var i = 0; i < this.visibleColumnsInGroups.length; i++) {
+                    var columnGroup = this.visibleColumnsInGroups[i];
                     var columnGroupsAfterPinningCheck = this.checkForPinningInColumnGroup(columnGroup);
                     columnGroupsAfterPinningCheck.forEach(function (newColumnGroup) {
                         _this.columnGroups.push(newColumnGroup);

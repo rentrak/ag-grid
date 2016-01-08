@@ -371,6 +371,7 @@ declare module ag.grid {
         private masterSlaveController;
         private allColumns;
         private allColumnsInGroups;
+        private visibleColumnsInGroups;
         private visibleColumns;
         private displayedColumns;
         private pivotColumns;
@@ -423,6 +424,8 @@ declare module ag.grid {
         private isGroupVisible(columnGroup);
         private splitColumnGroupForPinning(columnGroup, pinnedCols, unpinnedCols);
         private checkForPinningInColumnGroup(columnGroup);
+        private copyGroupWithOnlyVisibleColumns(columnGroup);
+        private updateVisibleColumnsInGroups();
         private updateVisibleColumnGroupsAndPinning();
         private updateGroups();
         private needAGroupColumn();
